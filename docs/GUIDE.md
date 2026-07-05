@@ -58,6 +58,6 @@ That last part is the key mental model: **your exit value is a one-way ratchet**
 
 **Can the team touch the vault?** The program has no admin functions. No withdraw, no pause, no parameter change. Vault SOL leaves only through holder redemptions. Read `program/src/lib.rs`, it is about 600 lines.
 
-**What if everyone sells?** The vault pays every single holder at the floor and keeps the accumulated fees. The price stays where it was. The next buyer starts on a floor funded by everyone who left. Measured in the test suite: after a 100% exit, the vault retained fees and a restart buy worked at the same never-reset price.
+**What if everyone sells?** The vault pays every holder out in full at the floor. The price stays exactly where it was, it never resets. A later buyer starts fresh at that same price. While the token is alive and anyone is still holding, every sell leaves its floor share behind and lifts the floor for the remaining holders. Only on the very last exit, when nobody is left to benefit, that final share is released with the redemption instead of being stranded.
 
 **Why not just list on a DEX?** A DEX price can go down. This one cannot. If someone lists it externally anyway, arbitrage pins the external price between the floor and the curve price.

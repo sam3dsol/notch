@@ -574,7 +574,17 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
     // creator share goes to the creator; the rest to the seller.
     let gross = (units as u128).checked_mul(v).ok_or(err(E_OVERFLOW))? / supply as u128;
     let creator_fee = gross * curve.sell_fee_creator_bps as u128 / 10_000;
-    let floor_keep = gross * curve.sell_fee_floor_bps as u128 / 10_000;
+    // On a FULL exit (units == supply) the floor share would have no remaining
+    // holders to benefit and would strand in the vault as ownerless backing.
+    // With supply == 0 the buy() NAV floor is undefined (0/0) and skipped, so a
+    // later reviver could mint ~100% of a fresh supply cheaply and redeem that
+    // stranded value. We therefore pay the floor share out with the final
+    // redemption, keeping the invariant: supply == 0  =>  backing == 0.
+    let floor_keep = if units == supply {
+        0
+    } else {
+        gross * curve.sell_fee_floor_bps as u128 / 10_000
+    };
     let to_seller = u64::try_from(gross - creator_fee - floor_keep).map_err(|_| err(E_OVERFLOW))?;
     let creator_fee = u64::try_from(creator_fee).map_err(|_| err(E_OVERFLOW))?;
     let vault_out = to_seller + creator_fee;

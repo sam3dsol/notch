@@ -348,7 +348,10 @@ async fn main() {
     }
     check!(&format!("fuzz {} ops: price+NAV monotone, ratio >= 93.5%", ops), mono_ok && ops >= 10);
 
-    // --- 11) Full exit + restart (S=0 edge) -------------------------------------
+    // --- 11) Full exit + restart (S=0 edge; audit fix: no stranded floor) ------
+    // Exit everyone. The LAST seller triggers units==supply, so the floor share
+    // is paid out instead of stranded: supply==0 must imply backing==0, closing
+    // the NAV-floor-bypass path where a reviver could capture orphaned backing.
     for kp in [&buyer, &whale] {
         let bag = ctx.bag(&kp.pubkey()).await;
         if bag > 0 {
@@ -357,13 +360,19 @@ async fn main() {
     }
     check!("everyone exited: supply == 0", ctx.supply().await == 0);
     let leftover = ctx.backing().await;
-    check!("vault keeps the floor fees after full exit", leftover > 0);
-    println!("      leftover backing after full exit: {} lamports", leftover);
+    check!("AUDIT FIX: full exit strands NO backing (supply==0 => backing==0)", leftover == 0);
+    println!("      leftover backing after full exit: {} lamports (expect 0)", leftover);
     let p_final = ctx.curve().await.unwrap().price_fp;
     match send(rpc, &[curve::buy(&program, &buyer.pubkey(), &mint, &creator.pubkey(), SOL, 0)], &buyer, &[&buyer]).await {
         Ok(_) => {
             check!("restart buy after full exit works (S=0 edge)", ctx.bag(&buyer.pubkey()).await > 0);
             check!("price never reset", ctx.curve().await.unwrap().price_fp >= p_final);
+            // The reviver must NOT be able to instantly round-trip for a profit
+            // (i.e. no stranded value to capture): exit is still bounded by the cap.
+            let rbag = ctx.bag(&buyer.pubkey()).await;
+            let (exp_rv, _, _) = expected_sell(rbag, ctx.backing().await as u128, ctx.supply().await);
+            check!("AUDIT FIX: revival buy cannot be dumped for profit",
+                (exp_rv as f64 / SOL as f64) <= 1.0);
         }
         Err(e) => { check!("restart buy", false); println!("      err: {}", e); }
     }
