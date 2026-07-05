@@ -1,0 +1,23 @@
+[package]
+name = "uponly-client"
+version = "0.1.0"
+edition = "2021"
+description = "UPONLY curve client: instruction builders + local-validator test suite for the ratchet-curve token vault."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "curve-test"
+path = "src/bin/curve_test.rs"
+
+[dependencies]
+solana-sdk = "2.3"
+borsh = "1.5"
+bincode = "1.3"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+bs58 = "0.5"
+base64 = "0.22"
+rand = "0.8"

@@ -1,0 +1,5 @@
+target/
+*-keypair.json
+*.so
+.env
+.DS_Store
