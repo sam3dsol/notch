@@ -26,11 +26,11 @@ const E18: u128 = 1_000_000_000_000_000_000;
 const CFG: LaunchCfg = LaunchCfg {
     start_price_fp: 1_000_000_000 * FP, // 1 SOL / token
     double_vol: 25 * SOL,        // schedule: 2x per 25 SOL (governor tempers it)
-    buy_fee_creator_bps: 0,      // buys: nothing to creator
-    buy_fee_floor_bps: 300,      // buys: 3% straight into the floor
-    sell_fee_creator_bps: 100,   // sells: 1% to creator
+    buy_fee_creator_bps: 100,    // buys: 1% to buy_creator (platform wallet)
+    buy_fee_floor_bps: 200,      // buys: 2% into the floor
+    sell_fee_creator_bps: 100,   // sells: 1% to sell_creator (deployer)
     sell_fee_floor_bps: 500,     // sells: 5% stays in the floor
-    min_backing_bps: 9_350,      // price <= NAV / 0.935 => <=15% all-in loss
+    min_backing_bps: 9_350,      // main token: backing 93.5% => ~15% max loss (platform FLOOR is 82.5%/25% for other launches)
 };
 
 fn load_kp(path: &str) -> Keypair {
@@ -187,16 +187,16 @@ async fn main() {
         .await
         .expect("create mint");
 
-    // --- 1) Initialize -----------------------------------------------------
-    match send(rpc, &[curve::initialize(&program, &creator.pubkey(), &mint, &CFG)], &creator, &[&creator]).await {
+    // --- 1) Initialize (main mint: creator plays payer + both fee roles) ----
+    match send(rpc, &[curve::initialize(&program, &creator.pubkey(), &creator.pubkey(), &creator.pubkey(), &mint, &CFG)], &creator, &[&creator]).await {
         Ok(_) => {
             let c = ctx.curve().await;
             check!("Initialize creates curve PDA", c.is_some());
             if let Some(c) = c {
                 check!("curve params correct",
-                    c.mint == mint && c.creator == creator.pubkey() && c.price_fp == CFG.start_price_fp
-                        && c.double_vol == CFG.double_vol
-                        && c.buy_fee_creator_bps == 0 && c.buy_fee_floor_bps == 300
+                    c.mint == mint && c.buy_creator == creator.pubkey() && c.sell_creator == creator.pubkey()
+                        && c.price_fp == CFG.start_price_fp && c.double_vol == CFG.double_vol
+                        && c.buy_fee_creator_bps == 100 && c.buy_fee_floor_bps == 200
                         && c.sell_fee_creator_bps == 100 && c.sell_fee_floor_bps == 500
                         && c.min_backing_bps == 9_350 && c.cum_vol == 0);
             }
@@ -205,22 +205,47 @@ async fn main() {
     }
 
     // --- 2) Re-initialize rejected ------------------------------------------
-    let reinit = send(rpc, &[curve::initialize(&program, &creator.pubkey(), &mint, &CFG)], &creator, &[&creator]).await;
+    let reinit = send(rpc, &[curve::initialize(&program, &creator.pubkey(), &creator.pubkey(), &creator.pubkey(), &mint, &CFG)], &creator, &[&creator]).await;
     check!("re-Initialize rejected", reinit.is_err());
 
-    // --- 2b) PLATFORM RULE: backing must be 50%+, governor is mandatory -------
+    // --- 2b) PLATFORM RULE: backing must be 82.5%+, governor is mandatory ----
     for (bps, ok, name) in [
-        (4000u16, false, "PLATFORM: backing 40% rejected (< 50% floor)"),
+        (4000u16, false, "PLATFORM: backing 40% rejected (< 82.5% floor)"),
         (0u16, false, "PLATFORM: ungoverned (0) rejected"),
-        (6000u16, true, "PLATFORM: backing 60% accepted"),
+        (8000u16, false, "PLATFORM: backing 80% rejected (< 82.5% floor)"),
+        (8500u16, true, "PLATFORM: backing 85% accepted"),
     ] {
         let mk = Keypair::new();
         let m = mk.pubkey();
         send(rpc, &curve::create_mint_ixs(&program, &payer.pubkey(), &m, mint_rent), &payer, &[&payer, &mk]).await.expect("mint");
         let mut cfg = CFG;
         cfg.min_backing_bps = bps;
-        let r = send(rpc, &[curve::initialize(&program, &creator.pubkey(), &m, &cfg)], &creator, &[&creator]).await;
+        let r = send(rpc, &[curve::initialize(&program, &creator.pubkey(), &creator.pubkey(), &creator.pubkey(), &m, &cfg)], &creator, &[&creator]).await;
         check!(name, r.is_ok() == ok);
+    }
+
+    // --- 2c) SPLIT FEES: buy 1% -> buy_creator, sell 1% -> sell_creator ------
+    {
+        let bc = Keypair::new();
+        let sc = Keypair::new();
+        let sniper = &buyer; // a buyer for this split-test mint
+        let mk = Keypair::new();
+        let m2 = mk.pubkey();
+        send(rpc, &curve::create_mint_ixs(&program, &payer.pubkey(), &m2, mint_rent), &payer, &[&payer, &mk]).await.expect("split mint");
+        send(rpc, &[curve::initialize(&program, &creator.pubkey(), &bc.pubkey(), &sc.pubkey(), &m2, &CFG)], &creator, &[&creator]).await.expect("split init");
+        send(rpc, &[curve::create_ata_ix(&sniper.pubkey(), &sniper.pubkey(), &m2)], sniper, &[sniper]).await.expect("split ata");
+        // buy: 1% must land on buy_creator (bc), NOT sell_creator (sc)
+        send(rpc, &[curve::buy(&program, &sniper.pubkey(), &m2, &bc.pubkey(), SOL, 0)], sniper, &[sniper]).await.expect("split buy");
+        check!("SPLIT: buy 1% went to buy_creator", ctx.rpc.balance(&bc.pubkey()).await == SOL / 100);
+        check!("SPLIT: sell_creator got nothing from a buy", ctx.rpc.balance(&sc.pubkey()).await == 0);
+        // buy with the WRONG creator account (sc) must be rejected
+        let bag2 = match ctx.rpc.account_data(&curve::ata(&sniper.pubkey(), &m2)).await { Some(d) => curve::token_amount(&d), None => 0 };
+        let wrong = send(rpc, &[curve::buy(&program, &sniper.pubkey(), &m2, &sc.pubkey(), SOL, 0)], sniper, &[sniper]).await;
+        check!("SPLIT: buy with wrong buy_creator rejected", wrong.is_err());
+        // sell: 1% must land on sell_creator (sc)
+        let sc_before = ctx.rpc.balance(&sc.pubkey()).await;
+        send(rpc, &[curve::sell(&program, &sniper.pubkey(), &m2, &sc.pubkey(), bag2 / 2, 0)], sniper, &[sniper]).await.expect("split sell");
+        check!("SPLIT: sell 1% went to sell_creator", ctx.rpc.balance(&sc.pubkey()).await > sc_before);
     }
 
     // --- 3) First buy: exact out, 3% to floor, creator gets NOTHING on buys ---
@@ -230,8 +255,8 @@ async fn main() {
     match send(rpc, &[curve::buy(&program, &buyer.pubkey(), &mint, &creator.pubkey(), SOL, 0)], &buyer, &[&buyer]).await {
         Ok(_) => {
             check!("buy#1 exact token out", ctx.bag(&buyer.pubkey()).await as u128 == exp_out1);
-            check!("buy#1 vault got net + 3% donation (full 1 SOL)", ctx.backing().await == SOL);
-            check!("buy#1 creator got NOTHING on a buy", rpc.balance(&creator.pubkey()).await == creator_bal0);
+            check!("buy#1 vault got net + 2% donation (0.99 SOL)", ctx.backing().await == SOL - SOL / 100);
+            check!("buy#1 buy_creator got exact 1%", rpc.balance(&creator.pubkey()).await == creator_bal0 + SOL / 100);
             let c = ctx.curve().await.unwrap();
             check!("buy#1 exact price advance", c.price_fp == exp_p1 && c.price_fp > CFG.start_price_fp);
             check!("buy#1 backing ratio >= 93.5%", ctx.ratio_ok().await);
@@ -315,7 +340,7 @@ async fn main() {
     let (exp_r, _, _) = expected_sell(fbag, ctx.backing().await as u128, ctx.supply().await);
     send(rpc, &[curve::sell(&program, &fresh.pubkey(), &mint, &creator.pubkey(), fbag, 0)], &fresh, &[&fresh]).await.expect("fresh sell");
     let loss = 1.0 - exp_r as f64 / SOL as f64;
-    check!(&format!("instant round trip loss {:.1}% <= 15% all-in", loss * 100.0), loss <= 0.15);
+    check!(&format!("main token round trip loss {:.1}% <= 15% all-in", loss * 100.0), loss <= 0.15);
 
     // --- 9) Dump-pump: dumps raise NAV, price frozen, next buy prints higher ---
     let p_pre_dump = ctx.curve().await.unwrap().price_fp;

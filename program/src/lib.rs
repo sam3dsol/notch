@@ -44,10 +44,10 @@ use solana_program::{
 // ---------------------------------------------------------------------------
 
 pub const CURVE_SEED: &[u8] = b"curve";
-/// mint(32) creator(32) price_fp(16) double_vol(8) buy_fee_creator(2)
-/// buy_fee_floor(2) sell_fee_creator(2) sell_fee_floor(2) min_backing(2)
-/// cum_vol(16) bump(1)
-pub const CURVE_SIZE: usize = 32 + 32 + 16 + 8 + 2 + 2 + 2 + 2 + 2 + 16 + 1; // = 115
+/// mint(32) buy_creator(32) sell_creator(32) price_fp(16) double_vol(8)
+/// buy_fee_creator(2) buy_fee_floor(2) sell_fee_creator(2) sell_fee_floor(2)
+/// min_backing(2) cum_vol(16) bump(1)
+pub const CURVE_SIZE: usize = 32 + 32 + 32 + 16 + 8 + 2 + 2 + 2 + 2 + 2 + 16 + 1; // = 147 (mint + buy_creator + sell_creator + ...)
 
 const TOKEN_PROGRAM: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
@@ -68,7 +68,7 @@ const MAX_BUY_DOUBLINGS: u128 = 8;
 pub const MAX_CREATOR_FEE_BPS: u16 = 500; // 5% per side
 pub const MAX_BUY_FLOOR_BPS: u16 = 1_000; // 10%
 pub const MAX_SELL_FLOOR_BPS: u16 = 2_000; // 20%
-pub const MIN_BACKING_FLOOR_BPS: u16 = 5_000; // PLATFORM RULE: every launch must keep backing at 50% or above (no ungoverned/degen launches)
+pub const MIN_BACKING_FLOOR_BPS: u16 = 8_250; // PLATFORM RULE: backing >= 82.5% => max round-trip loss <= 25% at 3%/6% fees (no ungoverned/degen launches)
 pub const MAX_BACKING_BPS: u16 = 9_900; // and at most 99% (100% = zero speed)
 pub const MIN_DOUBLE_VOL: u64 = 1_000_000_000; // 1 SOL per 2x minimum
 pub const MAX_DOUBLE_VOL: u64 = 10_000_000_000_000; // 10k SOL per 2x maximum
@@ -100,7 +100,10 @@ fn err(code: u32) -> ProgramError {
 #[derive(BorshSerialize, BorshDeserialize, Debug, Default)]
 pub struct Curve {
     pub mint: Pubkey,
-    pub creator: Pubkey,
+    /// Receives the buy creator fee (buy_fee_creator_bps of each buy).
+    pub buy_creator: Pubkey,
+    /// Receives the sell creator fee (sell_fee_creator_bps of each sell gross).
+    pub sell_creator: Pubkey,
     /// Lamports per whole token, scaled by FP. Monotone nondecreasing.
     pub price_fp: u128,
     /// Net buy lamports per price doubling (the schedule speed dial).
@@ -123,10 +126,14 @@ pub struct Curve {
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub enum CurveInstruction {
     /// Create the curve for `mint`. Mint must be: decimals 9, supply 0,
-    /// mint_authority == curve PDA, freeze_authority == None.
-    /// Accounts: [creator (signer, writable, payer), curve PDA (writable),
+    /// mint_authority == curve PDA, freeze_authority == None. `buy_creator`
+    /// and `sell_creator` are the fee-recipient addresses (may differ, may be
+    /// the payer); they are recorded, not signed, at init.
+    /// Accounts: [payer (signer, writable), curve PDA (writable),
     ///            mint, system_program]
     Initialize {
+        buy_creator: Pubkey,
+        sell_creator: Pubkey,
         start_price_fp: u128,
         double_vol: u64,
         buy_fee_creator_bps: u16,
@@ -138,12 +145,12 @@ pub enum CurveInstruction {
     /// Pay `lamports`, receive tokens at the (advancing, governed) curve price.
     /// Accounts: [buyer (signer, writable), curve PDA (writable),
     ///            mint (writable), buyer_token_account (writable),
-    ///            creator (writable), token_program, system_program]
+    ///            buy_creator (writable), token_program, system_program]
     Buy { lamports: u64, min_out: u64 },
     /// Burn `units`, redeem at NAV minus sell fees (floor share stays).
     /// Accounts: [seller (signer, writable), curve PDA (writable),
     ///            mint (writable), seller_token_account (writable),
-    ///            creator (writable), token_program]
+    ///            sell_creator (writable), token_program]
     Sell { units: u64, min_out: u64 },
 }
 
@@ -207,7 +214,6 @@ fn load_curve(
     program_id: &Pubkey,
     curve_ai: &AccountInfo,
     mint_ai: &AccountInfo,
-    creator_ai: &AccountInfo,
 ) -> Result<Curve, ProgramError> {
     if curve_ai.owner != program_id {
         return Err(err(E_BAD_PDA));
@@ -216,9 +222,6 @@ fn load_curve(
     let (expect, _) = curve_pda(program_id, &curve.mint);
     if expect != *curve_ai.key || curve.mint != *mint_ai.key {
         return Err(err(E_BAD_PDA));
-    }
-    if curve.creator != *creator_ai.key {
-        return Err(err(E_BAD_CREATOR));
     }
     Ok(curve)
 }
@@ -271,6 +274,8 @@ pub fn process_instruction(
 ) -> ProgramResult {
     match CurveInstruction::try_from_slice(data)? {
         CurveInstruction::Initialize {
+            buy_creator,
+            sell_creator,
             start_price_fp,
             double_vol,
             buy_fee_creator_bps,
@@ -281,6 +286,8 @@ pub fn process_instruction(
         } => initialize(
             program_id,
             accounts,
+            buy_creator,
+            sell_creator,
             start_price_fp,
             double_vol,
             buy_fee_creator_bps,
@@ -302,6 +309,8 @@ pub fn process_instruction(
 fn initialize(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
+    buy_creator: Pubkey,
+    sell_creator: Pubkey,
     start_price_fp: u128,
     double_vol: u64,
     buy_fee_creator_bps: u16,
@@ -311,12 +320,12 @@ fn initialize(
     min_backing_bps: u16,
 ) -> ProgramResult {
     let ai = &mut accounts.iter();
-    let creator_ai = next_account_info(ai)?;
+    let payer_ai = next_account_info(ai)?;
     let curve_ai = next_account_info(ai)?;
     let mint_ai = next_account_info(ai)?;
     let system_ai = next_account_info(ai)?;
 
-    if !creator_ai.is_signer {
+    if !payer_ai.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
     }
     if *system_ai.key != system_program::ID {
@@ -359,16 +368,16 @@ fn initialize(
     let seeds: &[&[u8]] = &[CURVE_SEED, mint_ai.key.as_ref(), &[bump]];
     if curve_ai.lamports() == 0 {
         invoke_signed(
-            &system_instruction::create_account(creator_ai.key, curve_ai.key, rent, CURVE_SIZE as u64, program_id),
-            &[creator_ai.clone(), curve_ai.clone(), system_ai.clone()],
+            &system_instruction::create_account(payer_ai.key, curve_ai.key, rent, CURVE_SIZE as u64, program_id),
+            &[payer_ai.clone(), curve_ai.clone(), system_ai.clone()],
             &[seeds],
         )?;
     } else {
         // PDA was pre-funded (griefing attempt or donation): allocate+assign path.
         if curve_ai.lamports() < rent {
             invoke(
-                &system_instruction::transfer(creator_ai.key, curve_ai.key, rent - curve_ai.lamports()),
-                &[creator_ai.clone(), curve_ai.clone(), system_ai.clone()],
+                &system_instruction::transfer(payer_ai.key, curve_ai.key, rent - curve_ai.lamports()),
+                &[payer_ai.clone(), curve_ai.clone(), system_ai.clone()],
             )?;
         }
         invoke_signed(
@@ -385,7 +394,8 @@ fn initialize(
 
     let curve = Curve {
         mint: *mint_ai.key,
-        creator: *creator_ai.key,
+        buy_creator,
+        sell_creator,
         price_fp: start_price_fp,
         double_vol,
         buy_fee_creator_bps,
@@ -398,14 +408,11 @@ fn initialize(
     };
     store_curve(&curve, curve_ai)?;
     msg!(
-        "uponly: init mint={} price_fp={} 2x_per={} buyfee={}+{} sellfee={}+{} backing>={}",
+        "uponly: init mint={} buy_creator={} sell_creator={} price_fp={} backing>={}",
         mint_ai.key,
+        buy_creator,
+        sell_creator,
         start_price_fp,
-        double_vol,
-        buy_fee_creator_bps,
-        buy_fee_floor_bps,
-        sell_fee_creator_bps,
-        sell_fee_floor_bps,
         min_backing_bps
     );
     Ok(())
@@ -421,7 +428,7 @@ fn buy(program_id: &Pubkey, accounts: &[AccountInfo], lamports: u64, min_out: u6
     let curve_ai = next_account_info(ai)?;
     let mint_ai = next_account_info(ai)?;
     let buyer_ta_ai = next_account_info(ai)?;
-    let creator_ai = next_account_info(ai)?;
+    let buy_creator_ai = next_account_info(ai)?;
     let token_ai = next_account_info(ai)?;
     let system_ai = next_account_info(ai)?;
 
@@ -434,7 +441,10 @@ fn buy(program_id: &Pubkey, accounts: &[AccountInfo], lamports: u64, min_out: u6
     if lamports == 0 {
         return Err(err(E_ZERO_AMOUNT));
     }
-    let mut curve = load_curve(program_id, curve_ai, mint_ai, creator_ai)?;
+    let mut curve = load_curve(program_id, curve_ai, mint_ai)?;
+    if curve.buy_creator != *buy_creator_ai.key {
+        return Err(err(E_BAD_CREATOR));
+    }
     if token_account_mint(&buyer_ta_ai.data.borrow())? != curve.mint {
         return Err(err(E_BAD_TOKEN_ACCOUNT));
     }
@@ -462,8 +472,8 @@ fn buy(program_id: &Pubkey, accounts: &[AccountInfo], lamports: u64, min_out: u6
     )?;
     if creator_fee > 0 {
         invoke(
-            &system_instruction::transfer(buyer_ai.key, creator_ai.key, creator_fee),
-            &[buyer_ai.clone(), creator_ai.clone(), system_ai.clone()],
+            &system_instruction::transfer(buyer_ai.key, buy_creator_ai.key, creator_fee),
+            &[buyer_ai.clone(), buy_creator_ai.clone(), system_ai.clone()],
         )?;
     }
 
@@ -547,7 +557,7 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
     let curve_ai = next_account_info(ai)?;
     let mint_ai = next_account_info(ai)?;
     let seller_ta_ai = next_account_info(ai)?;
-    let creator_ai = next_account_info(ai)?;
+    let sell_creator_ai = next_account_info(ai)?;
     let token_ai = next_account_info(ai)?;
 
     if !seller_ai.is_signer {
@@ -559,7 +569,10 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
     if units == 0 {
         return Err(err(E_ZERO_AMOUNT));
     }
-    let curve = load_curve(program_id, curve_ai, mint_ai, creator_ai)?;
+    let curve = load_curve(program_id, curve_ai, mint_ai)?;
+    if curve.sell_creator != *sell_creator_ai.key {
+        return Err(err(E_BAD_CREATOR));
+    }
     if token_account_mint(&seller_ta_ai.data.borrow())? != curve.mint {
         return Err(err(E_BAD_TOKEN_ACCOUNT));
     }
@@ -606,7 +619,7 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
     **curve_ai.try_borrow_mut_lamports()? -= vault_out;
     **seller_ai.try_borrow_mut_lamports()? += to_seller;
     if creator_fee > 0 {
-        **creator_ai.try_borrow_mut_lamports()? += creator_fee;
+        **sell_creator_ai.try_borrow_mut_lamports()? += creator_fee;
     }
     if curve_ai.lamports() < rent_floor()? {
         return Err(err(E_INSUFFICIENT_VAULT));

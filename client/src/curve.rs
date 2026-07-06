@@ -9,7 +9,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 pub const CURVE_SEED: &[u8] = b"curve";
-pub const CURVE_SIZE: usize = 115;
+pub const CURVE_SIZE: usize = 147;
 pub const MINT_SIZE: usize = 82;
 pub const FP: u128 = 1_000_000_000;
 
@@ -24,7 +24,8 @@ pub fn ata_program() -> Pubkey {
 #[derive(BorshSerialize, BorshDeserialize, Debug, Default, Clone)]
 pub struct Curve {
     pub mint: Pubkey,
-    pub creator: Pubkey,
+    pub buy_creator: Pubkey,
+    pub sell_creator: Pubkey,
     pub price_fp: u128,
     pub double_vol: u64,
     pub buy_fee_creator_bps: u16,
@@ -39,6 +40,8 @@ pub struct Curve {
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub enum CurveInstruction {
     Initialize {
+        buy_creator: Pubkey,
+        sell_creator: Pubkey,
         start_price_fp: u128,
         double_vol: u64,
         buy_fee_creator_bps: u16,
@@ -79,17 +82,26 @@ pub fn ata(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
 // Program instructions
 // ---------------------------------------------------------------------------
 
-pub fn initialize(program_id: &Pubkey, creator: &Pubkey, mint: &Pubkey, cfg: &LaunchCfg) -> Instruction {
+pub fn initialize(
+    program_id: &Pubkey,
+    payer: &Pubkey,
+    buy_creator: &Pubkey,
+    sell_creator: &Pubkey,
+    mint: &Pubkey,
+    cfg: &LaunchCfg,
+) -> Instruction {
     let (pda, _) = curve_pda(program_id, mint);
     Instruction {
         program_id: *program_id,
         accounts: vec![
-            AccountMeta::new(*creator, true),
+            AccountMeta::new(*payer, true),
             AccountMeta::new(pda, false),
             AccountMeta::new_readonly(*mint, false),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
         data: borsh::to_vec(&CurveInstruction::Initialize {
+            buy_creator: *buy_creator,
+            sell_creator: *sell_creator,
             start_price_fp: cfg.start_price_fp,
             double_vol: cfg.double_vol,
             buy_fee_creator_bps: cfg.buy_fee_creator_bps,
@@ -106,7 +118,7 @@ pub fn buy(
     program_id: &Pubkey,
     buyer: &Pubkey,
     mint: &Pubkey,
-    creator: &Pubkey,
+    buy_creator: &Pubkey,
     lamports: u64,
     min_out: u64,
 ) -> Instruction {
@@ -118,7 +130,7 @@ pub fn buy(
             AccountMeta::new(pda, false),
             AccountMeta::new(*mint, false),
             AccountMeta::new(ata(buyer, mint), false),
-            AccountMeta::new(*creator, false),
+            AccountMeta::new(*buy_creator, false),
             AccountMeta::new_readonly(token_program(), false),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
@@ -130,7 +142,7 @@ pub fn sell(
     program_id: &Pubkey,
     seller: &Pubkey,
     mint: &Pubkey,
-    creator: &Pubkey,
+    sell_creator: &Pubkey,
     units: u64,
     min_out: u64,
 ) -> Instruction {
@@ -142,7 +154,7 @@ pub fn sell(
             AccountMeta::new(pda, false),
             AccountMeta::new(*mint, false),
             AccountMeta::new(ata(seller, mint), false),
-            AccountMeta::new(*creator, false),
+            AccountMeta::new(*sell_creator, false),
             AccountMeta::new_readonly(token_program(), false),
         ],
         data: borsh::to_vec(&CurveInstruction::Sell { units, min_out }).unwrap(),

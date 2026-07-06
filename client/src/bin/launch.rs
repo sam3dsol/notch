@@ -51,11 +51,21 @@ async fn main() {
     let mint = mint_kp.pubkey();
     let rpc = Rpc::new(&url);
 
+    // Fee recipients. Default buy-creator = platform fee wallet; default
+    // sell-creator = the deployer/payer. Both overridable per launch.
+    let buy_creator = Pubkey::from_str(
+        &std::env::var("BUY_CREATOR").unwrap_or_else(|_| "Bj6kYwqS7Le5SkwYepMTDUpDZNgmYTfXW9FPAvRq7vsY".into()),
+    ).expect("BUY_CREATOR pubkey");
+    let sell_creator = match std::env::var("SELL_CREATOR") {
+        Ok(s) => Pubkey::from_str(&s).expect("SELL_CREATOR pubkey"),
+        Err(_) => payer.pubkey(),
+    };
+
     let cfg = LaunchCfg {
         start_price_fp: env_u128("START_PRICE_FP", 1_000_000_000_000_000_000),
         double_vol: env_u64("DOUBLE_VOL_SOL", 25) * SOL,
-        buy_fee_creator_bps: env_u16("BUY_FEE_CREATOR_BPS", 0),
-        buy_fee_floor_bps: env_u16("BUY_FEE_FLOOR_BPS", 300),
+        buy_fee_creator_bps: env_u16("BUY_FEE_CREATOR_BPS", 100),
+        buy_fee_floor_bps: env_u16("BUY_FEE_FLOOR_BPS", 200),
         sell_fee_creator_bps: env_u16("SELL_FEE_CREATOR_BPS", 100),
         sell_fee_floor_bps: env_u16("SELL_FEE_FLOOR_BPS", 500),
         min_backing_bps: env_u16("MIN_BACKING_BPS", 9350),
@@ -65,18 +75,20 @@ async fn main() {
     let mint_rent = rpc.min_balance(curve::MINT_SIZE).await;
 
     println!("UPONLY atomic launch");
-    println!("  program : {}", program);
-    println!("  creator : {}  (payer, fee recipient)", payer.pubkey());
-    println!("  mint    : {}", mint);
-    println!("  curvePDA: {}", curve_pda);
+    println!("  program     : {}", program);
+    println!("  payer       : {}", payer.pubkey());
+    println!("  buy_creator : {}  (gets 1% of buys)", buy_creator);
+    println!("  sell_creator: {}  (gets 1% of sells)", sell_creator);
+    println!("  mint        : {}", mint);
+    println!("  curvePDA    : {}", curve_pda);
     println!(
-        "  config  : start={} 2x_per={} SOL buy=3%->floor sell=6%(1%cr+5%fl) backing>={}bps",
+        "  config      : start={} 2x_per={} SOL buy=3%(1%cr+2%fl) sell=6%(1%cr+5%fl) backing>={}bps (main token ~15%; platform floor 82.5%/25%)",
         cfg.start_price_fp, cfg.double_vol / SOL, cfg.min_backing_bps
     );
 
     // ONE atomic transaction: create+init mint (authority = curve PDA), then Initialize.
     let mut ixs = curve::create_mint_ixs(&program, &payer.pubkey(), &mint, mint_rent);
-    ixs.push(curve::initialize(&program, &payer.pubkey(), &mint, &cfg));
+    ixs.push(curve::initialize(&program, &payer.pubkey(), &buy_creator, &sell_creator, &mint, &cfg));
     println!("  tx      : {} instructions (create_account, InitializeMint2, Initialize) in ONE tx", ixs.len());
 
     if std::env::var("DRY").is_ok() {
@@ -92,9 +104,9 @@ async fn main() {
         Ok(sig) => {
             // verify the curve exists and reads back correctly
             match rpc.account_data(&curve_pda).await.and_then(|d| curve::parse_curve(&d)) {
-                Some(c) if c.mint == mint && c.creator == payer.pubkey() => {
+                Some(c) if c.mint == mint && c.buy_creator == buy_creator && c.sell_creator == sell_creator => {
                     println!("LAUNCHED  sig={}", sig);
-                    println!("  curve OK: creator={} price_fp={} backing>={}bps", c.creator, c.price_fp, c.min_backing_bps);
+                    println!("  curve OK: buy_creator={} sell_creator={} price_fp={} backing>={}bps", c.buy_creator, c.sell_creator, c.price_fp, c.min_backing_bps);
                     println!("  token is live. Buy: uponly Buy ix against mint {}", mint);
                 }
                 _ => println!("SENT but curve readback failed (sig={})", sig),
