@@ -99,7 +99,7 @@ The floor rises exactly as fast as traders collectively pay in (fees plus the pr
 maximum instant loss  ==  the fuel rate  ==  the speed
 ```
 
-They are the same number wearing different hats. Cap everyone's worst case at 15% and each round trip can contribute at most ~15% of its size to the floor. Loosen the cap and the chart runs faster but the worst case worsens in lockstep. There is no configuration that is both fast at scale and fully backed; a fully backed up-only token grows only as fast as fee inflow relative to market cap.
+They are the same number wearing different hats. Cap everyone's worst case at 15% and each round trip can contribute at most ~15% of its size to the floor. Loosen the cap and the chart runs faster but the worst case worsens in lockstep. There is no configuration that is both fast at scale and fully backed; a fully backed NOTCH token grows only as fast as fee inflow relative to market cap.
 
 NOTCH does not escape this law. It makes the trade-off explicit, configurable per launch, and enforced on-chain instead of implied by trust.
 
@@ -121,7 +121,7 @@ All other knobs (fees, their creator/floor split, launch price, schedule) are al
 
 Volume-fee LSTs put a transfer fee (6.9% in the best-known case) into backing, so the redemption rate only rises. That design is 100% backed at all times, which also makes it slow: a doubling needs roughly 10x the market cap in transfer volume.
 
-NOTCH keeps the part that works (sells strengthen the token, value is volume-fed, exit is always guaranteed) and changes two things: the chart price itself is up-only rather than just the redemption rate, and the safety-speed trade-off is a configurable, on-chain-enforced parameter instead of a fixed 100% backing. At 93.5% backing the early phase moves roughly 10x faster per SOL of volume; at scale the conservation law applies to everyone equally.
+NOTCH keeps the part that works (sells strengthen the token, value is volume-fed, exit is always guaranteed) and changes two things: the chart price itself only moves up rather than just the redemption rate, and the safety-speed trade-off is a configurable, on-chain-enforced parameter instead of a fixed 100% backing. At 93.5% backing the early phase moves roughly 10x faster per SOL of volume; at scale the conservation law applies to everyone equally.
 
 ## 8. Worst cases, measured
 
