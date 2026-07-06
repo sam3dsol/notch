@@ -1,8 +1,8 @@
 [package]
-name = "uponly-client"
+name = "notch-client"
 version = "0.1.0"
 edition = "2021"
-description = "UPONLY curve client: instruction builders + local-validator test suite for the ratchet-curve token vault."
+description = "NOTCH curve client: instruction builders + local-validator test suite for the ratchet-curve token vault."
 
 [lib]
 path = "src/lib.rs"

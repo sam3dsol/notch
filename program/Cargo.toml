@@ -1,8 +1,8 @@
 [package]
-name = "uponly"
+name = "notch"
 version = "0.1.0"
 edition = "2021"
-description = "UPONLY ratchet-curve token vault: quoted price only rises (buys advance the curve, sells redeem at NAV and pump the floor). No admin functions; vault SOL only exits via Sell."
+description = "NOTCH ratchet-curve token vault: quoted price only rises (buys advance the curve, sells redeem at NAV and pump the floor). No admin functions; vault SOL only exits via Sell."
 
 [lib]
 crate-type = ["cdylib", "lib"]

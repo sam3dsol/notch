@@ -1,4 +1,4 @@
-//! UPONLY — ratchet-curve token vault. The quoted price can only go UP.
+//! NOTCH — ratchet-curve token vault. The quoted price can only go UP.
 //!
 //! v2 tokenomics (per-launch config, immutable after Initialize):
 //!   * BUY fee (e.g. 3%): `buy_fee_creator_bps` to the creator wallet,
@@ -408,7 +408,7 @@ fn initialize(
     };
     store_curve(&curve, curve_ai)?;
     msg!(
-        "uponly: init mint={} buy_creator={} sell_creator={} price_fp={} backing>={}",
+        "notch: init mint={} buy_creator={} sell_creator={} price_fp={} backing>={}",
         mint_ai.key,
         buy_creator,
         sell_creator,
@@ -543,7 +543,7 @@ fn buy(program_id: &Pubkey, accounts: &[AccountInfo], lamports: u64, min_out: u6
         &[&[CURVE_SEED, curve.mint.as_ref(), &[curve.bump]]],
     )?;
 
-    msg!("uponly: buy {} lamports -> {} units, price_fp {} -> {}", lamports, out64, price_before, p);
+    msg!("notch: buy {} lamports -> {} units, price_fp {} -> {}", lamports, out64, price_before, p);
     Ok(())
 }
 
@@ -625,6 +625,6 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
         return Err(err(E_INSUFFICIENT_VAULT));
     }
 
-    msg!("uponly: sell {} units -> {} lamports (floor kept {})", units, to_seller, floor_keep as u64);
+    msg!("notch: sell {} units -> {} lamports (floor kept {})", units, to_seller, floor_keep as u64);
     Ok(())
 }

@@ -1,8 +1,8 @@
-# UPONLY
+# NOTCH
 
 **A Solana token standard where the chart price can never go down. Not as a promise, as a property of the code.**
 
-UPONLY is a ratchet-curve token vault. Every token trades against its own on-chain vault instead of a DEX pool. Buys advance the price. Sells redeem against the vault floor and leave a fee behind that raises the floor for everyone still holding. The price is mathematically incapable of printing a red candle, and the worst possible outcome for any buyer is bounded on-chain at 15% all-in.
+NOTCH is a ratchet-curve token vault. Every token trades against its own on-chain vault instead of a DEX pool. Buys advance the price. Sells redeem against the vault floor and leave a fee behind that raises the floor for everyone still holding. The price is mathematically incapable of printing a red candle, and the worst possible outcome for any buyer is bounded on-chain at 15% all-in.
 
 Proven with 34/34 on-chain tests, including a randomized fuzz that asserts price and floor never decreased once.
 
@@ -70,7 +70,7 @@ cd program && cargo-build-sbf
 
 # run the full test suite against a local validator
 solana-test-validator --reset &
-solana program deploy program/target/deploy/uponly.so --program-id <your-keypair>
+solana program deploy program/target/deploy/notch.so --program-id <your-keypair>
 cd client && cargo build
 RPC=http://127.0.0.1:8899 PROGRAM=<program-id> PAYER=<payer.json> ./target/debug/curve-test
 ```

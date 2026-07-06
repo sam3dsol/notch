@@ -1,10 +1,10 @@
-# UPONLY Holder Guide
+# NOTCH Holder Guide
 
-Plain-language guide to what actually happens when you buy, hold, and sell an UPONLY token.
+Plain-language guide to what actually happens when you buy, hold, and sell an NOTCH token.
 
 ## What you are buying
 
-An UPONLY token has no liquidity pool. It trades against its own vault, a program account that holds all the SOL ever paid in. Two numbers matter:
+An NOTCH token has no liquidity pool. It trades against its own vault, a program account that holds all the SOL ever paid in. Two numbers matter:
 
 - **Price**: what you pay to mint new tokens. It only moves up.
 - **Floor**: what every token is guaranteed to redeem for (vault divided by supply). It also only moves up.

@@ -1,4 +1,4 @@
-# UPONLY Security Audit
+# NOTCH Security Audit
 
 Internal adversarial audit of `program/src/lib.rs`. Eight independent reviewers each took one attack surface (arithmetic and rounding, account and signer validation, SPL byte parsing, economic and game-theoretic invariants, CPI and lamport handling, initialization and lifecycle, denial of service and griefing, value conservation and accounting). Every raw finding was then handed to a separate adversarial verifier whose job was to refute it by tracing the actual guards.
 

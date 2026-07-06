@@ -1,4 +1,4 @@
-# Building and Testing UPONLY
+# Building and Testing NOTCH
 
 ## Toolchain
 
@@ -9,7 +9,7 @@
 ## Build
 
 ```bash
-# on-chain program -> program/target/deploy/uponly.so (+ a program keypair)
+# on-chain program -> program/target/deploy/notch.so (+ a program keypair)
 cd program
 cargo-build-sbf
 
@@ -18,7 +18,7 @@ cd ../client
 cargo build
 ```
 
-Note: `cargo-build-sbf` generates `program/target/deploy/uponly-keypair.json`. That keypair IS your program address on every cluster. Keep it out of the repo and back it up.
+Note: `cargo-build-sbf` generates `program/target/deploy/notch-keypair.json`. That keypair IS your program address on every cluster. Keep it out of the repo and back it up.
 
 ## Run the suite
 
@@ -27,8 +27,8 @@ solana-test-validator --reset --quiet &
 
 # fund a payer and deploy
 solana airdrop 1200 <payer-pubkey> --url http://127.0.0.1:8899
-solana program deploy program/target/deploy/uponly.so \
-  --program-id program/target/deploy/uponly-keypair.json \
+solana program deploy program/target/deploy/notch.so \
+  --program-id program/target/deploy/notch-keypair.json \
   --keypair <payer.json> --url http://127.0.0.1:8899
 
 RPC=http://127.0.0.1:8899 PROGRAM=<program-id> PAYER=<payer.json> \
@@ -77,10 +77,10 @@ Economic properties, measured live:
 
 ## The Python simulator
 
-`sim/uponly_sim.py` mirrors the same integer math and generated the datasets in `data/`. Use it to test any launch configuration before deploying:
+`sim/notch_sim.py` mirrors the same integer math and generated the datasets in `data/`. Use it to test any launch configuration before deploying:
 
 ```bash
-python3 sim/uponly_sim.py            # prints the reference tables
+python3 sim/notch_sim.py            # prints the reference tables
 ```
 
 Edit the constants at the top (fees, backing, schedule, start price) to model your own launch.

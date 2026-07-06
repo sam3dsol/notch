@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""UPONLY simulator.
+"""NOTCH simulator.
 
 Mirrors the on-chain program's integer math exactly (same chunk loop, same
 governor, same rounding), so its outputs match the deployed program to the
 lamport. Edit CONFIG to model any launch before deploying it.
 
 Usage:
-    python3 uponly_sim.py             # prints reference tables
-    python3 uponly_sim.py --csv DIR   # also writes the two datasets to DIR
+    python3 notch_sim.py             # prints reference tables
+    python3 notch_sim.py --csv DIR   # also writes the two datasets to DIR
 """
 
 import sys
@@ -127,13 +127,13 @@ def main():
 
     if "--csv" in sys.argv:
         outdir = sys.argv[sys.argv.index("--csv") + 1]
-        with open(f"{outdir}/uponly-dataset-buys-1to500.csv", "w") as f:
+        with open(f"{outdir}/notch-dataset-buys-1to500.csv", "w") as f:
             f.write("cum_buys_sol,entry_price_sol,tokens_for_1sol,eff_cost_sol,price_after_sol,"
                     "nav_sol,redeem_price_after_fees_sol,backing_pct,pool_sol,"
                     "instant_roundtrip_sol,instant_pnl_pct\n")
             for r in rows:
                 f.write(",".join(f"{x:.10g}" for x in r) + "\n")
-        with open(f"{outdir}/uponly-dataset-sells-after500.csv", "w") as f:
+        with open(f"{outdir}/notch-dataset-sells-after500.csv", "w") as f:
             f.write("sell_n,tokens_sold,seller_receives_sol,nav_sol,redeem_price_sol,"
                     "price_frozen_sol,pool_sol\n")
             for r in sells:

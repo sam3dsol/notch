@@ -1,8 +1,8 @@
-//! UPONLY atomic launcher.
+//! NOTCH atomic launcher.
 //!
-//! Launches a new UPONLY token in a SINGLE transaction:
+//! Launches a new NOTCH token in a SINGLE transaction:
 //!   [ create mint account, InitializeMint2 (authority = curve PDA, no freeze),
-//!     UPONLY Initialize ]
+//!     NOTCH Initialize ]
 //! Because mint-creation, authority assignment, and Initialize all land in one
 //! atomic tx, the mint never exists on-chain before Initialize commits, so the
 //! permissionless-Initialize front-run (audit: creator-fee-role hijack) has zero
@@ -10,7 +10,7 @@
 //!
 //! Env:
 //!   RPC        JSON-RPC url (default http://127.0.0.1:8899)
-//!   PROGRAM    UPONLY program id
+//!   PROGRAM    NOTCH program id
 //!   PAYER      creator/deployer keypair path (the vanity wallet); pays + becomes creator
 //!   MINT       optional mint keypair path (e.g. a vanity mint); else a fresh random mint
 //!   DRY        if set, prints the plan and the derived curve PDA, sends nothing
@@ -25,7 +25,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::str::FromStr;
-use uponly_client::{curve, curve::LaunchCfg, rpc::Rpc};
+use notch_client::{curve, curve::LaunchCfg, rpc::Rpc};
 
 const SOL: u64 = 1_000_000_000;
 
@@ -74,7 +74,7 @@ async fn main() {
     let (curve_pda, _) = curve::curve_pda(&program, &mint);
     let mint_rent = rpc.min_balance(curve::MINT_SIZE).await;
 
-    println!("UPONLY atomic launch");
+    println!("NOTCH atomic launch");
     println!("  program     : {}", program);
     println!("  payer       : {}", payer.pubkey());
     println!("  buy_creator : {}  (gets 1% of buys)", buy_creator);
@@ -107,7 +107,7 @@ async fn main() {
                 Some(c) if c.mint == mint && c.buy_creator == buy_creator && c.sell_creator == sell_creator => {
                     println!("LAUNCHED  sig={}", sig);
                     println!("  curve OK: buy_creator={} sell_creator={} price_fp={} backing>={}bps", c.buy_creator, c.sell_creator, c.price_fp, c.min_backing_bps);
-                    println!("  token is live. Buy: uponly Buy ix against mint {}", mint);
+                    println!("  token is live. Buy: notch Buy ix against mint {}", mint);
                 }
                 _ => println!("SENT but curve readback failed (sig={})", sig),
             }

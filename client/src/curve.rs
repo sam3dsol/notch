@@ -1,4 +1,4 @@
-//! UPONLY curve client: state mirror + instruction builders + SPL helpers.
+//! NOTCH curve client: state mirror + instruction builders + SPL helpers.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_sdk::{

@@ -1,4 +1,4 @@
-//! UPONLY v2 curve test suite, against a local validator.
+//! NOTCH v2 curve test suite, against a local validator.
 //! Reference launch config (user spec 2026-07-05):
 //!   buy fee 3% (all to floor), sell fee 6% (1% creator + 5% floor),
 //!   governor min backing 93.5% => worst-case instant round trip ~ -14.8%
@@ -15,7 +15,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::str::FromStr;
-use uponly_client::{curve, curve::LaunchCfg, rpc::Rpc};
+use notch_client::{curve, curve::LaunchCfg, rpc::Rpc};
 
 const SOL: u64 = 1_000_000_000;
 const FP: u128 = 1_000_000_000;
