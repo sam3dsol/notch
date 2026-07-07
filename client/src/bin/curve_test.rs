@@ -19,9 +19,59 @@ use notch_client::{curve, curve::LaunchCfg, rpc::Rpc};
 
 const SOL: u64 = 1_000_000_000;
 const FP: u128 = 1_000_000_000;
-const LN2_FP: u128 = 693_147_181;
-const CHUNK_DIV: u128 = 32;
 const E18: u128 = 1_000_000_000_000_000_000;
+
+// Path-independent power-law mint mirror (must match program/src/lib.rs exactly).
+const POW_F: u32 = 48;
+const POW_ONE: u128 = 1u128 << POW_F;
+const TWO_POW_LUT: [u128; 49] = [
+    0, 398065729532861, 334732044999537, 306950638654744, 293936938588305,
+    287638476118103, 284540038248454, 283003357999923, 282238132792268,
+    281856296460737, 281665572056717, 281570258256901, 281522613452764,
+    281498794074042, 281486885140443, 281480930862574, 281477953770871,
+    281476465236828, 281475720972758, 281475348841461, 281475162775997,
+    281475069743311, 281475023226980, 281474999968817, 281474988339736,
+    281474982525196, 281474979617926, 281474978164291, 281474977437473,
+    281474977074065, 281474976892360, 281474976801508, 281474976756082,
+    281474976733369, 281474976722013, 281474976716334, 281474976713495,
+    281474976712076, 281474976711366, 281474976711011, 281474976710833,
+    281474976710745, 281474976710700, 281474976710678, 281474976710667,
+    281474976710662, 281474976710659, 281474976710657, 281474976710657,
+];
+
+fn log2_q(mut x: u128) -> u128 {
+    let mut e: u128 = 0;
+    while x >= (POW_ONE << 1) { x >>= 1; e += 1; }
+    let mut result = e << POW_F;
+    let mut i: u32 = 1;
+    while i <= POW_F {
+        x = (x * x) >> POW_F;
+        if x >= (POW_ONE << 1) { result += POW_ONE >> i; x >>= 1; }
+        i += 1;
+    }
+    result
+}
+fn exp2_q(y: u128) -> u128 {
+    let int_part = y >> POW_F;
+    let frac = y & (POW_ONE - 1);
+    let mut r = POW_ONE;
+    let mut i: u32 = 1;
+    while i <= POW_F {
+        if frac & (POW_ONE >> i) != 0 { r = (r * TWO_POW_LUT[i as usize]) >> POW_F; }
+        i += 1;
+    }
+    if int_part >= 128 { return u128::MAX; }
+    let ip = int_part as u32;
+    if r > (u128::MAX >> ip) { u128::MAX } else { r << ip }
+}
+fn pow_ratio_q(num: u128, den: u128, bps: u16) -> Option<u128> {
+    if den == 0 || num < den { return None; }
+    let ratio = num.checked_mul(POW_ONE)? / den;
+    let l = log2_q(ratio);
+    let b = (bps as u128 * POW_ONE) / 10_000;
+    let bl = l.checked_mul(b)? >> POW_F;
+    Some(exp2_q(bl))
+}
 
 const CFG: LaunchCfg = LaunchCfg {
     start_price_fp: 1_000_000_000 * FP, // 1 SOL / token
@@ -51,47 +101,24 @@ fn cu_limit(units: u32) -> Instruction {
 /// Exact mirror of the program's buy math (running NAV + governor).
 /// Returns (new_price_fp, out_units).
 fn expected_buy(price_fp: u128, lamports: u64, v_pre: u128, s0: u128) -> (u128, u128) {
-    let d = CFG.double_vol as u128;
     let creator_fee = lamports as u128 * CFG.buy_fee_creator_bps as u128 / 10_000;
     let donation = lamports as u128 * CFG.buy_fee_floor_bps as u128 / 10_000;
     let net = lamports as u128 - creator_fee - donation;
-    let chunk = std::cmp::max(d / CHUNK_DIV, 1);
-    let mut remaining = net;
-    let mut v_run = v_pre + donation;
-    let mut p = price_fp;
-    let mut out: u128 = 0;
-    while remaining > 0 {
-        let c = std::cmp::min(remaining, chunk);
-        let p0 = p;
-        p += p * (LN2_FP * c / d) / FP;
-        let s_run = s0 + out;
-        let pe;
-        if s_run > 0 {
-            let nav = v_run * E18 / s_run;
-            if CFG.min_backing_bps > 0 {
-                let cap = nav
-                    .checked_mul(10_000)
-                    .map(|x| x / CFG.min_backing_bps as u128)
-                    .unwrap_or(u128::MAX);
-                if p > cap {
-                    p = cap;
-                }
-                if p < p0 {
-                    p = p0;
-                }
-            }
-            let mut pe_ = (p0 + p) / 2;
-            if pe_ <= nav {
-                pe_ = nav + nav / 10_000 + 1;
-            }
-            pe = pe_;
-        } else {
-            pe = (p0 + p) / 2;
-        }
-        out += c * E18 / pe;
-        v_run += c;
-        remaining -= c;
-    }
+    let v0 = v_pre + donation;
+    let vf = v0 + net;
+    let out = if s0 == 0 {
+        net * E18 / price_fp
+    } else {
+        let factor = pow_ratio_q(vf, v0, CFG.min_backing_bps).unwrap();
+        (s0 * factor >> POW_F) - s0
+    };
+    let s_new = s0 + out;
+    let nav_new = vf * E18 / s_new;
+    let price_new = nav_new
+        .checked_mul(10_000)
+        .map(|x| x / CFG.min_backing_bps as u128)
+        .unwrap_or(u128::MAX);
+    let p = std::cmp::max(price_new, price_fp);
     (p, out)
 }
 
@@ -313,8 +340,16 @@ async fn main() {
     let bad_buy = send(rpc, &[curve::buy(&program, &buyer.pubkey(), &mint, &imposter.pubkey(), SOL, 0)], &buyer, &[&buyer]).await;
     check!("buy with wrong creator account rejected", bad_buy.is_err());
     send(rpc, &[curve::create_ata_ix(&whale.pubkey(), &whale.pubkey(), &mint)], &whale, &[&whale]).await.expect("whale ata");
+    // The old 8-doublings buy cap is gone: minting is now path-independent, so a
+    // large buy yields exactly the power-law amount (splitting it gives the same)
+    // and there is no reason to force a split.
+    let pbig = ctx.curve().await.unwrap().price_fp;
+    let (_, exp_big) = expected_buy(pbig, 210 * SOL, ctx.backing().await as u128, ctx.supply().await as u128);
+    let big_bag0 = ctx.bag(&whale.pubkey()).await;
     let huge = send(rpc, &[cu_limit(600_000), curve::buy(&program, &whale.pubkey(), &mint, &creator.pubkey(), 210 * SOL, 0)], &whale, &[&whale]).await;
-    check!("buy > 8 doublings rejected (split required)", huge.is_err());
+    check!("large buy (210 SOL) allowed — no artificial cap", huge.is_ok());
+    check!("large buy exact token out matches power law", (ctx.bag(&whale.pubkey()).await - big_bag0) as u128 == exp_big);
+    check!("large buy: backing ratio >= 93.5% held", ctx.ratio_ok().await);
 
     // --- 7) Whale buy 100 SOL: exact under governor ----------------------------
     let pw = ctx.curve().await.unwrap().price_fp;

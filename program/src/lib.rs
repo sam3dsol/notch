@@ -4,16 +4,21 @@
 //!   * BUY fee (e.g. 3%): `buy_fee_creator_bps` to the creator wallet,
 //!     `buy_fee_floor_bps` donated straight into the vault (lifts NAV for
 //!     everyone, including the buyer). The remainder mints tokens at the
-//!     curve price, which advances 2^(net/double_vol) — the speed dial.
+//!     governor price = NAV / backing.
 //!   * SELL fee (e.g. 6%): seller redeems at NAV; `sell_fee_creator_bps` of
 //!     gross to the creator, `sell_fee_floor_bps` STAYS in the vault (sells
 //!     raise the floor). Sells never move the price.
-//!   * GOVERNOR: `min_backing_bps` (e.g. 9350 = 93.5%) caps the price at
-//!     NAV / ratio, chunk-by-chunk with running NAV. This bounds the
-//!     price-vs-floor gap forever, so the worst possible instant round trip
-//!     is fees + gap (with 3%/6% fees and 93.5% backing: ~-14.8% all-in).
-//!     PLATFORM RULE: min_backing_bps must be 5000..=9900 (50% to 99%), so
-//!     the governor is always on and no launch can drop below 50% backing.
+//!   * MINT (path-independent): tokens are minted at price = NAV / backing via
+//!     the exact power law `S1 = S0 * (Vf/V0)^backing` (integer fixed-point,
+//!     see pow_ratio_q). Composable => buy(a) then buy(b) == buy(a+b), so the
+//!     minted amount does NOT depend on how a buy is split. (Replaces the old
+//!     chunked `2^(net/double_vol)` curve, which carried a laggy price and was
+//!     path-dependent: splitting a buy farmed free tokens. `double_vol`/
+//!     `price_fp` remain in state but are vestigial; price_fp = reported price.)
+//!   * GOVERNOR: `min_backing_bps` (e.g. 9350 = 93.5%) pins price at NAV/ratio,
+//!     bounding the price-vs-floor gap forever, so the worst instant round trip
+//!     is fees + gap (3%/6% fees, 93.5% backing: ~-14.7% all-in; platform floor
+//!     82.5% => <=25%). PLATFORM RULE: min_backing_bps must be 8250..=9900.
 //!
 //! Invariants (enforced by construction, proven in curve_test):
 //!   * curve price is monotone nondecreasing; NAV is monotone nondecreasing
@@ -685,4 +690,107 @@ fn sell(program_id: &Pubkey, accounts: &[AccountInfo], units: u64, min_out: u64)
 
     msg!("notch: sell {} units -> {} lamports (floor kept {})", units, to_seller, floor_keep as u64);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for the path-independent mint math (native `cargo test`).
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod mint_tests {
+    use super::*;
+
+    /// Pure model of buy()'s mint, mirroring the on-chain math exactly.
+    struct Sim {
+        v: u128,          // vault (lamports)
+        s: u128,          // supply (base units)
+        price_fp: u128,   // start price
+        backing_bps: u16,
+        buy_creator_bps: u16,
+        buy_floor_bps: u16,
+    }
+    impl Sim {
+        fn new(backing_bps: u16, buy_floor_bps: u16) -> Self {
+            Sim { v: 0, s: 0, price_fp: 10_000_000_000_000, backing_bps, buy_creator_bps: 100, buy_floor_bps }
+        }
+        fn buy(&mut self, lamports: u128) -> u128 {
+            let creator = lamports * self.buy_creator_bps as u128 / 10_000;
+            let donation = lamports * self.buy_floor_bps as u128 / 10_000;
+            let net = lamports - creator - donation;
+            let v0 = self.v + donation;
+            let vf = v0 + net;
+            let out = if self.s == 0 {
+                net * E18 / self.price_fp
+            } else {
+                let factor = pow_ratio_q(vf, v0, self.backing_bps).unwrap();
+                (self.s * factor >> POW_F) - self.s
+            };
+            self.v = vf;
+            self.s += out;
+            out
+        }
+        fn floor_fp(&self) -> u128 { if self.s > 0 { self.v * E18 / self.s } else { 0 } }
+        // net lamports a holder of `units` gets on sell (6% = 1% creator + 5% floor)
+        fn sell_net(&self, units: u128) -> u128 {
+            let gross = units * self.v / self.s;
+            gross - gross * 100 / 10_000 - gross * 500 / 10_000
+        }
+    }
+
+    #[test]
+    fn pow_matches_reference() {
+        // (21)^0.935 ~= 17.22959, (60)^0.825 ~= 29.30723  (verified vs float 4e-14)
+        let a = pow_ratio_q(21_000_000_000, 1_000_000_000, 9350).unwrap() as f64 / POW_ONE as f64;
+        let b = pow_ratio_q(60_000_000_000, 1_000_000_000, 8250).unwrap() as f64 / POW_ONE as f64;
+        assert!((a - 17.229_593_87).abs() < 1e-6, "got {a}");
+        assert!((b - 29.307_230_60).abs() < 1e-6, "got {b}");
+    }
+
+    #[test]
+    fn mint_is_path_independent() {
+        // No buy-floor donation => the power law is EXACTLY split-invariant.
+        // Seed 1 SOL, then 100 SOL of follow-on volume split 4 ways; supply must match.
+        let sol = 1_000_000_000u128;
+        let run = |parts: u128| -> u128 {
+            let mut sim = Sim::new(8500, 0);
+            sim.buy(sol);
+            let chunk = 100 * sol / parts;
+            for _ in 0..parts { sim.buy(chunk); }
+            sim.s
+        };
+        let base = run(1);
+        for parts in [20u128, 200, 2000] {
+            let got = run(parts);
+            let rel = (got as i128 - base as i128).unsigned_abs() as f64 / base as f64;
+            assert!(rel < 1e-6, "split {parts}: supply {got} vs {base} (rel {rel:.2e})");
+        }
+    }
+
+    #[test]
+    fn floor_never_falls() {
+        // With the real 2% donation + governor, NAV must be monotone nondecreasing.
+        let sol = 1_000_000_000u128;
+        let mut sim = Sim::new(8250, 200);
+        sim.buy(sol);
+        let mut last = sim.floor_fp();
+        for i in 0..200u128 {
+            sim.buy(sol + (i % 7) * sol / 3); // varied buy sizes
+            let f = sim.floor_fp();
+            assert!(f >= last, "floor fell at step {i}: {f} < {last}");
+            last = f;
+        }
+    }
+
+    #[test]
+    fn max_loss_within_25pct_at_floor_backing() {
+        // 82.5% backing + 3%/6% fees => worst instant round trip must be <= 25%.
+        let sol = 1_000_000_000u128;
+        let mut sim = Sim::new(8250, 200);
+        sim.buy(100 * sol); // establish a pool
+        let spend = sol / 100; // small buy
+        let got = sim.buy(spend);
+        let back = sim.sell_net(got) as f64 / spend as f64;
+        let loss = (1.0 - back) * 100.0;
+        assert!(loss <= 25.0, "max loss {loss:.2}% exceeds 25%");
+        assert!(loss > 20.0, "sanity: expected ~22-25%, got {loss:.2}%");
+    }
 }

@@ -15,8 +15,8 @@ import sys
 # ---------------------------------------------------------------- CONFIG ---
 START_PRICE_FP = 10_000 * 10**9   # 0.00001 SOL per token (lamports/token * 1e9)
 DOUBLE_VOL     = 25 * 10**9       # schedule: price 2x per 25 SOL of buys
-BUY_FEE_CREATOR_BPS = 0           # buys: creator share
-BUY_FEE_FLOOR_BPS   = 300         # buys: donated straight to the vault
+BUY_FEE_CREATOR_BPS = 100         # buys: 1% to the platform wallet
+BUY_FEE_FLOOR_BPS   = 200         # buys: 2% donated straight to the vault
 SELL_FEE_CREATOR_BPS = 100        # sells: creator share of gross
 SELL_FEE_FLOOR_BPS   = 500        # sells: stays in the vault
 MIN_BACKING_BPS      = 9_350      # governor: price <= NAV * 10000 / this (0 = off)
@@ -24,9 +24,40 @@ MIN_BACKING_BPS      = 9_350      # governor: price <= NAV * 10000 / this (0 = o
 
 E18 = 10**18
 FP = 10**9
-LN2 = 693_147_181
 SOL = 10**9
-CHUNK = max(DOUBLE_VOL // 32, 1)
+
+# Q48 fixed-point power (mirrors program/src/lib.rs) for the path-independent mint.
+POW_F = 48
+POW_ONE = 1 << POW_F
+TWO_POW_LUT = [0, 398065729532861, 334732044999537, 306950638654744, 293936938588305, 287638476118103, 284540038248454, 283003357999923, 282238132792268, 281856296460737, 281665572056717, 281570258256901, 281522613452764, 281498794074042, 281486885140443, 281480930862574, 281477953770871, 281476465236828, 281475720972758, 281475348841461, 281475162775997, 281475069743311, 281475023226980, 281474999968817, 281474988339736, 281474982525196, 281474979617926, 281474978164291, 281474977437473, 281474977074065, 281474976892360, 281474976801508, 281474976756082, 281474976733369, 281474976722013, 281474976716334, 281474976713495, 281474976712076, 281474976711366, 281474976711011, 281474976710833, 281474976710745, 281474976710700, 281474976710678, 281474976710667, 281474976710662, 281474976710659, 281474976710657, 281474976710657]
+
+
+def _log2q(x):
+    e = 0
+    while x >= (POW_ONE << 1):
+        x >>= 1; e += 1
+    r = e << POW_F
+    for i in range(1, POW_F + 1):
+        x = (x * x) >> POW_F
+        if x >= (POW_ONE << 1):
+            r += POW_ONE >> i; x >>= 1
+    return r
+
+
+def _exp2q(y):
+    ip = y >> POW_F; fr = y & (POW_ONE - 1); r = POW_ONE
+    for i in range(1, POW_F + 1):
+        if fr & (POW_ONE >> i):
+            r = (r * TWO_POW_LUT[i]) >> POW_F
+    return r << ip
+
+
+def pow_ratio_q(num, den, bps):
+    if den == 0 or num < den:
+        return None
+    ratio = (num * POW_ONE) // den
+    bl = (_log2q(ratio) * ((bps * POW_ONE) // 10000)) >> POW_F
+    return _exp2q(bl)
 
 
 class Curve:
@@ -42,27 +73,22 @@ class Curve:
         dn = lamports * BUY_FEE_FLOOR_BPS // 10_000
         net = lamports - cf - dn
         self.creator += cf
-        rem, p, out = net, self.price, 0
-        v_run, s0 = self.vault + dn, self.supply
-        while rem > 0:
-            c = min(rem, CHUNK)
-            p0 = p
-            p = p + p * (LN2 * c // DOUBLE_VOL) // FP        # schedule advance
-            s_run = s0 + out
-            if s_run > 0:
-                nav = v_run * E18 // s_run
-                if MIN_BACKING_BPS:
-                    cap = nav * 10_000 // MIN_BACKING_BPS    # governor
-                    p = max(min(p, cap), p0)                 # never down
-                pe = (p0 + p) // 2
-                if pe <= nav:
-                    pe = nav + nav // 10_000 + 1             # never mint below NAV
-            else:
-                pe = (p0 + p) // 2
-            out += c * E18 // pe
-            v_run += c
-            rem -= c
-        self.price, self.vault, self.supply = p, v_run, s0 + out
+        # Path-independent mint at the governor price. Donation lands first, then
+        # net mints at price = NAV/backing => S1 = S0 * (Vf/V0)^backing. Splitting
+        # a buy can't change the result (replaces the old path-dependent chunk loop).
+        v0 = self.vault + dn
+        vf = v0 + net
+        s0 = self.supply
+        if s0 == 0:
+            out = net * E18 // self.price            # genesis: mint at start price
+        else:
+            factor = pow_ratio_q(vf, v0, MIN_BACKING_BPS)
+            out = (s0 * factor >> POW_F) - s0
+        self.vault, self.supply = vf, s0 + out
+        # reported price = NAV / backing (never decreases)
+        nav = vf * E18 // self.supply
+        price_new = nav * 10_000 // MIN_BACKING_BPS if MIN_BACKING_BPS else nav
+        self.price = max(price_new, self.price)
         return out  # token units minted
 
     # -- exact mirror of the program's Sell --------------------------------
