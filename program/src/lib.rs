@@ -7,7 +7,7 @@
 //!     governor price = NAV / backing.
 //!   * SELL fee (e.g. 6%): seller redeems at NAV; `sell_fee_creator_bps` of
 //!     gross to the creator, `sell_fee_floor_bps` STAYS in the vault (sells
-//!     raise the floor). Sells never move the price.
+//!     raise the floor for everyone who stays). Sells never move the price.
 //!   * MINT (path-independent): tokens are minted at price = NAV / backing via
 //!     the exact power law `S1 = S0 * (Vf/V0)^backing` (integer fixed-point,
 //!     see pow_ratio_q). Composable => buy(a) then buy(b) == buy(a+b), so the

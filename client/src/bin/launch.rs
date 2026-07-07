@@ -51,7 +51,7 @@ async fn main() {
     let mint = mint_kp.pubkey();
     let rpc = Rpc::new(&url);
 
-    // Fee recipients. Default buy-creator = platform fee wallet; default
+    // Fee recipients. Default buy-creator = the platform fee wallet; default
     // sell-creator = the deployer/payer. Both overridable per launch.
     let buy_creator = Pubkey::from_str(
         &std::env::var("BUY_CREATOR").unwrap_or_else(|_| "Bj6kYwqS7Le5SkwYepMTDUpDZNgmYTfXW9FPAvRq7vsY".into()),
