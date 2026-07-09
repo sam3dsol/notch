@@ -2,7 +2,7 @@
 
 ## The short version
 
-We attacked our own program before anyone else could.
+We stress-tested our own program before anyone else could.
 
 Eight independent reviewers were each given one way to try to break NOTCH: the math, the account checks, the byte parsing, the economics, the money movement, the launch flow, denial of service, and the accounting. Everything they claimed was then handed to a separate adversarial verifier whose only job was to prove them wrong by tracing the actual code.
 
@@ -14,7 +14,7 @@ This was a rigorous internal review, not a review by an external firm. Read it, 
 
 ## How the audit worked
 
-Each reviewer owned one attack surface:
+Each reviewer owned one risk area:
 
 | Surface | The question they tried to answer |
 |---|---|
