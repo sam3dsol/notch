@@ -161,6 +161,34 @@ pub fn sell(
     }
 }
 
+/// Sell that appends the payout PDA + system program (accounts 7 & 8), so the
+/// program pays the seller/creator via visible System transfer CPIs.
+pub fn sell_via_payout(
+    program_id: &Pubkey,
+    seller: &Pubkey,
+    mint: &Pubkey,
+    sell_creator: &Pubkey,
+    units: u64,
+    min_out: u64,
+) -> Instruction {
+    let (pda, _) = curve_pda(program_id, mint);
+    let (payout, _) = Pubkey::find_program_address(&[b"payout"], program_id);
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new(*seller, true),
+            AccountMeta::new(pda, false),
+            AccountMeta::new(*mint, false),
+            AccountMeta::new(ata(seller, mint), false),
+            AccountMeta::new(*sell_creator, false),
+            AccountMeta::new_readonly(token_program(), false),
+            AccountMeta::new(payout, false),
+            AccountMeta::new_readonly(system_program::id(), false),
+        ],
+        data: borsh::to_vec(&CurveInstruction::Sell { units, min_out }).unwrap(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SPL setup helpers (mint creation + ATA)
 // ---------------------------------------------------------------------------

@@ -334,6 +334,27 @@ async fn main() {
         Err(e) => { check!("sell", false); println!("      err: {}", e); }
     }
 
+    // --- 5b) Sell via payout PDA route: visible System-transfer payout --------
+    {
+        let v = ctx.backing().await as u128;
+        let s = ctx.supply().await;
+        let units = ctx.bag(&buyer.pubkey()).await / 2;
+        let (exp_recv, _exp_vault_out, exp_cf) = expected_sell(units, v, s);
+        let seller_before = rpc.balance(&buyer.pubkey()).await;
+        let creator_before = rpc.balance(&creator.pubkey()).await;
+        let p_before = ctx.curve().await.unwrap().price_fp;
+        match send(rpc, &[curve::sell_via_payout(&program, &buyer.pubkey(), &mint, &creator.pubkey(), units, 0)], &buyer, &[&buyer]).await {
+            Ok(_) => {
+                let delta = rpc.balance(&buyer.pubkey()).await + 5_000 - seller_before;
+                check!("PAYOUT-ROUTE sell succeeded + seller paid exact 94%", delta == exp_recv);
+                check!("PAYOUT-ROUTE creator paid exact 1%", rpc.balance(&creator.pubkey()).await == creator_before + exp_cf);
+                check!("PAYOUT-ROUTE sell burned units", ctx.supply().await == s - units);
+                check!("PAYOUT-ROUTE price still frozen", ctx.curve().await.unwrap().price_fp == p_before);
+            }
+            Err(e) => { check!("PAYOUT-ROUTE sell succeeded", false); println!("      err: {}", e); }
+        }
+    }
+
     // --- 6) Guards -----------------------------------------------------------
     let too_high = send(rpc, &[curve::buy(&program, &buyer.pubkey(), &mint, &platform, SOL, u64::MAX)], &buyer, &[&buyer]).await;
     check!("buy min_out too high rejected", too_high.is_err());
